@@ -21,76 +21,23 @@ function Get-TargetResource
         [string] $Ensure = "Present"
     )
 
-    #Credential Check: Validating the auth user for creating the Database
-    if($psboundparameters.Auth -eq "Windows")
-    {
-        try{
-        if($Credential)
-        {
-            $principalContext = New-Object System.DirectoryServices.AccountManagement.PrincipalContext -ArgumentList ([System.DirectoryServices.AccountManagement.ContextType]::Machine)
-            $verifyCredential = ([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username))
-            $AdminGroup = [System.DirectoryServices.AccountManagement.GroupPrincipal]::FindByIdentity($principalContext, "Administrators")
-            $AdminMember = [bool]([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username).IsMemberOf($AdminGroup))
-            $GroupSQL = [bool]($role.enumMemberNames().contains("BUILTIN\Administrators"))
-            if(($verifyCredential) -and ($AdminMember) -and ($GroupSQL))
-            {$CredentialOK = $true}else{
-                $CredentialOK = $false;
-                Write-Verbose "Credential user information incorrect"
-                Write-Verbose " User found: [bool]$verifyCredential /n User is Admin: $AdminMember /n Administrators in sysAdmins: $GroupSQL"
-                }
-        }else{
-            $GroupSQL = [bool]($role.enumMemberNames()| ? { $_ -match "SYSTEM"})
-            if($groupSQL)
-            {$CredentialOK = $true}else{
-                $CredentialOK = $false;
-                Write-Verbose "System is not in the sysAdmins role."
-                }
-            }
-        }
-        finally
-        {
-        if ($verifyCredential -ne $null)
-        {
-            $verifyCredential.Dispose()
-            $AdminGroup.Dispose()
-        }
-        $principalContext.Dispose()
-        }
-    }
-    elseif ($psboundparameters.Auth -eq "SQL")
-    {
+    #Credential Check: Validating Credential is a PSCredential
+    if($Credential.GetType().Name -eq "PSCredential")
+	{
+	$CredentialOK = $true
+	}else{$CredentialOK = $false}
+    if($User.GetType().Name -eq "PSCredential")
+	{
+	$UserOK = $true
+	}else{$UserOK = $false}
     
-    #Programming notice: The current script does not test at this stage to ensure password is accurate
-    #for Credential user.
-        try{
-        if($Credential)
-        {
-            $UserSQL = [bool]($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -match $Credential.UserName)
-            $GroupSQL = [bool]($role.enumMemberNames()| ? {$_ -match $Credential.UserName})
-            if(($userSQL) -and ($GroupSQL))
-            {$CredentialOK = $true}else{
-            $CredentialOK = $false;
-            Write-Verbose "Credential information incorrect"
-            Write-Verbose " User found: $UserSQL /n User in sysAdmins: $GroupSQL"}
-        }elseif(Test-Path "C:\SQL_SA_Password.txt")
-        {
-            if (($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -match "sa"))
-            {$CredentialOK = $true}else{$CredentialOK = $false}
-        }
-        }
-        finally{Write-Verbose "Credential Check Result: $CredentialOK"}
-    }
-    #User Check: Test if User exists and has perm.
-    $UserCheck = [bool]($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -match $User.UserName)
-    $AdminCheck = [bool]($role.enumMemberNames()| ? {$_ -match $User.UserName})
-    if(($UserCheck) -and ($AdminCheck -match $Admin)){$Ensure = "Present"}else{$Ensure = "Absent"}
 
     Return @{
             Name = $Name;
-            User = $User.UserName;
-            Admin = $AdminCheck;
+            User = $UserOK;
+            Admin = $Admin;
             Auth = $Auth;
-            Credential = $Credential.UserName;
+            Credential = $CredentialOK;
             Ensure = $Ensure
             }
 }
@@ -120,15 +67,16 @@ function Set-TargetResource
         {
             Write-Verbose "Windows Auth with Credentials Specified. Testing Credential rights."
             $principalContext = New-Object System.DirectoryServices.AccountManagement.PrincipalContext -ArgumentList ([System.DirectoryServices.AccountManagement.ContextType]::Machine)
-            $verifyCredential = ([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username))
+            $AdminExist = ([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username))
             $AdminGroup = [System.DirectoryServices.AccountManagement.GroupPrincipal]::FindByIdentity($principalContext, "Administrators")
             $AdminMember = [bool]([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username).IsMemberOf($AdminGroup))
+            $CredValid = [bool]$principalContext.ValidateCredentials($Credential.UserName, $Credential.GetNetworkCredential().Password)
             $GroupSQL = [bool]($role.enumMemberNames().contains("BUILTIN\Administrators"))
-            if(($verifyCredential) -and ($AdminMember) -and ($GroupSQL))
+            if(($AdminExist) -and ($AdminMember) -and ($CredValid) -and ($GroupSQL))
             {
                 Write-Verbose "Credential test successful. Connecting to SQL with Admin Credentials."
                 $server = Login-SQLServer -Auth $Auth -Cred $Credential
-            }
+            }else{Write-Verbose "Credential test Failed. Check your Credential object"}
         }else{Write-Verbose "Windows Auth without Credentials specified. Using DSC Run Account."}
         }
         finally
@@ -217,7 +165,7 @@ function Test-TargetResource
         $AdminCheck = [bool]($role.enumMemberNames()| ? {$_ -match $User.UserName})
         Write-Verbose "Testing User account login to SQL"
         $server = Login-SQLAccount -Auth SQL -Cred $User
-        if($server.Logins -neq $null){$UserCheck = $true}
+        if($server.Logins -ne $null){$UserCheck = $true}
     }else{
         $UserCheck = $false
         $AdminCheck = $false
@@ -240,10 +188,10 @@ Function Login-SQLServer
     param(
     [Parameter(Mandatory)]
     [ValidateSet("Windows","SQL")]
-    [string]$Auth;
+    [string]$Auth,
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
-    [pscredential]$Cred;
+    [pscredential]$Cred
     )
     if($auth -eq "Windows"){$NTmode = $true}else{$NTmode = $false}
     $server = $null
