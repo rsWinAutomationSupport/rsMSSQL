@@ -1,0 +1,10 @@
+[ClassVersion("1.0.0"), FriendlyName("rsSQLUser")]
+class RS_rsSQLUser : OMI_BaseResource
+{
+[key]string Name;
+[write,Description("User account to create within SQL"),EmbeddedInstance("MSFT_Credential")]string User;
+[write,Description("Create user as Sysadmin.")]boolean Admin;
+[write,Description("Authentication method"),ValueMap{"Windows", "SQL"},Values{"Windows", "SQL"}]string Auth;
+[write,Description("Account to use for creating SQL user."),EmbeddedInstance("MSFT_Credential")]string Credential;
+[write,ValueMap{"Present", "Absent"},Values{"Present", "Absent"}] string Ensure;
+};
