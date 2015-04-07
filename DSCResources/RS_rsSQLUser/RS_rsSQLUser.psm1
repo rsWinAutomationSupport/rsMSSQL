@@ -23,13 +23,13 @@ function Get-TargetResource
 
     #Credential Check: Validating Credential is a PSCredential
     if($Credential.GetType().Name -eq "PSCredential")
-	{
-	$CredentialOK = $true
-	}else{$CredentialOK = $false}
+    {
+    $CredentialOK = $true
+    }else{$CredentialOK = $false}
     if($User.GetType().Name -eq "PSCredential")
-	{
-	$UserOK = $true
-	}else{$UserOK = $false}
+    {
+    $UserOK = $true
+    }else{$UserOK = $false}
     
 
     Return @{
@@ -94,8 +94,8 @@ function Set-TargetResource
         if($Credential)
         {
             Write-Verbose "SQL Auth with Credentials Specified. Testing Credential rights."
-            $UserSQL = [bool]($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -match $Credential.UserName)
-            $GroupSQL = [bool]($role.enumMemberNames()| ? {$_ -match $Credential.UserName})
+            $UserSQL = [bool]($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -match $Credential.UserName)
+            $GroupSQL = [bool]($role.enumMemberNames()| Where-Object {$_ -match $Credential.UserName})
             if(($userSQL) -and ($GroupSQL))
             {
                 Write-Verbose "Credential test successful. Connecting to SQL with SQL Credentials."
@@ -104,7 +104,7 @@ function Set-TargetResource
         }elseif(Test-Path "C:\SQL_SA_Password.txt")
         {
             $pass = (Get-Content C:\SQL_SA_Password.txt -Delimiter ' = ')[1]
-            if (($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -match "sa"))
+            if (($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -match "sa"))
             {
                 Write-Verbose "Creating sa user PSCredential"
                 $secpass = ConvertTo-SecureString $pass -AsPlainText -Force
@@ -115,26 +115,34 @@ function Set-TargetResource
         }
     }
     
-    # Creating new SQL User Account.
-    if(!($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -eq $User.UserName))
+    if($psboundparameters.Ensure -eq "Present")
     {
-        $login = new-object Microsoft.SqlServer.Management.Smo.Login($server, $User.UserName)
-        $login.LoginType = 'SqlLogin'
-        $login.PasswordPolicyEnforced = $false
-        $login.PasswordExpirationEnabled = $false
-        $login.Create($User.GetNetworkCredential().Password)
-        if($Admin)
+        # Creating new SQL User Account.
+        if(!($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -eq $User.UserName))
         {
-            $role = $null
-            $role = New-object Microsoft.SqlServer.Management.Smo.ServerRole($server, "sysAdmin")
-            $role.AddMember($User.UserName)
+            $login = new-object Microsoft.SqlServer.Management.Smo.Login($server, $User.UserName)
+            $login.LoginType = 'SqlLogin'
+            $login.PasswordPolicyEnforced = $false
+            $login.PasswordExpirationEnabled = $false
+            $login.Create($User.GetNetworkCredential().Password)
+            if($Admin)
+            {
+                $role = $null
+                $role = New-object Microsoft.SqlServer.Management.Smo.ServerRole($server, "sysAdmin")
+                $role.AddMember($User.UserName)
+            }
+        }
+        # Updating password for an exising SQL User Account to match State.
+        elseif(($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -eq $User.UserName))
+        {
+            $login = $server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -eq $User.UserName
+            $login.ChangePassword($User.GetNetworkCredential().Password, $true, $false)
         }
     }
-    # Updating password for an exising SQL User Account to match State.
-    elseif(($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -eq $User.UserName))
+    elseif(($psboundparameters.Ensure -eq "Absent") -and ($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -eq $User.UserName))
     {
-        $login = $server.Logins | ? LoginType -eq "SqlLogin" | ? Name -eq $User.UserName
-        $login.ChangePassword($User.GetNetworkCredential().Password, $true, $false)
+        $login = $server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -eq $User.UserName
+        $login.drop()
     }
 }
 
@@ -159,12 +167,12 @@ function Test-TargetResource
     #User Check: Test if User exists and has perm.
     
     
-    if(($server.Logins | ? LoginType -eq "SqlLogin" | ? Name -match $User.UserName))
+    if(($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -match $User.UserName))
     {
         Write-Verbose "Verify user account in Role membership"
-        $AdminCheck = [bool]($role.enumMemberNames()| ? {$_ -match $User.UserName})
+        $AdminCheck = [bool]($role.enumMemberNames()| Where-Object {$_ -match $User.UserName})
         Write-Verbose "Testing User account login to SQL"
-        $server = Login-SQLAccount -Auth SQL -Cred $User
+        $server = Login-SQLServer -Auth SQL -Cred $User
         if($server.Logins -ne $null){$UserCheck = $true}
     }else{
         $UserCheck = $false
