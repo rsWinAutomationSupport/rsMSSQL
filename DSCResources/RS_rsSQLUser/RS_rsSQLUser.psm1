@@ -112,7 +112,7 @@ function Set-TargetResource
             }
         }elseif(Test-Path $FilePath)
         {
-            $pass = ((Get-Content $FilePath).replace(' ','') -Delimiter '=')[1]
+            $pass = ((Get-Content $FilePath).replace(' ','') -Split '=')[1]
             if (($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -match "sa"))
             {
                 Write-Verbose "Creating sa user PSCredential"
