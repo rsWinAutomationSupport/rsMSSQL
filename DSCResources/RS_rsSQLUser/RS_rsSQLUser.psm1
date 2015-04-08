@@ -17,21 +17,44 @@ function Get-TargetResource
         [ValidateSet("Windows","SQL")]
         [String]$Auth = "SQL",
         [pscredential]$Credential,
+        [String]$FilePath,
         [ValidateSet("Present", "Absent")]
         [string] $Ensure = "Present"
     )
 
-    #Credential Check: Validating Credential is a PSCredential
-    if($Credential.GetType().Name -eq "PSCredential")
-    {
-    $CredentialOK = $true
-    }else{$CredentialOK = $false}
+    #Presets
+    $UserOK = $false
+    $CredentialOK = $false
+    
+    #User Credential Check: Validating User is a PSCredential
     if($User.GetType().Name -eq "PSCredential")
     {
-    $UserOK = $true
+        $UserOK = $true
     }else{$UserOK = $false}
     
-
+    if (($Auth -eq "Windows") -and ($Credential))
+    {
+        Write-Verbose "Windows Auth with Credentials Specified. Testing Credential rights."
+        $CredValid = Test-Auth -Credential $Credential
+        $GroupSQL = [bool]($role.enumMemberNames().contains("BUILTIN\Administrators"))
+        if(($CredValid) -and ($GroupSQL))
+        {
+            $CredentialOK = $true
+        }
+    }
+    if(($Auth -eq "SQL") -and ($Credential))
+    {
+        $UserSQL = [bool]($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -match $Credential.UserName)
+        $GroupSQL = [bool]($role.enumMemberNames()| Where-Object {$_ -match $Credential.UserName})
+        if(($userSQL) -and ($GroupSQL))
+        {
+            $CredentialOK = $true
+        }
+    }
+    if(($Auth -eq "SQL") -and ($FilePath) -and (!$Credential))
+    {
+        if(Test-Path $FilePath){$CredentialOK = $true}
+    }
     Return @{
             Name = $Name;
             User = $UserOK;
@@ -56,38 +79,24 @@ function Set-TargetResource
         [ValidateSet("Windows","SQL")]
         [String]$Auth = "SQL",
         [pscredential]$Credential,
+        [String]$FilePath,
         [ValidateSet("Present", "Absent")]
         [string] $Ensure = "Present"
     )
 
     if($psboundparameters.Auth -eq "Windows")
     {
-        try{
         if($Credential)
         {
             Write-Verbose "Windows Auth with Credentials Specified. Testing Credential rights."
-            $principalContext = New-Object System.DirectoryServices.AccountManagement.PrincipalContext -ArgumentList ([System.DirectoryServices.AccountManagement.ContextType]::Machine)
-            $AdminExist = ([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username))
-            $AdminGroup = [System.DirectoryServices.AccountManagement.GroupPrincipal]::FindByIdentity($principalContext, "Administrators")
-            $AdminMember = [bool]([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username).IsMemberOf($AdminGroup))
-            $CredValid = [bool]$principalContext.ValidateCredentials($Credential.UserName, $Credential.GetNetworkCredential().Password)
+            $CredValid = Test-Auth -Credential $Credential
             $GroupSQL = [bool]($role.enumMemberNames().contains("BUILTIN\Administrators"))
-            if(($AdminExist) -and ($AdminMember) -and ($CredValid) -and ($GroupSQL))
+            if(($CredValid) -and ($GroupSQL))
             {
                 Write-Verbose "Credential test successful. Connecting to SQL with Admin Credentials."
                 $server = Login-SQLServer -Auth $Auth -Cred $Credential
             }else{Write-Verbose "Credential test Failed. Check your Credential object"}
         }else{Write-Verbose "Windows Auth without Credentials specified. Using DSC Run Account."}
-        }
-        finally
-        {
-        if ($verifyCredential -ne $null)
-        {
-            $verifyCredential.Dispose()
-            $AdminGroup.Dispose()
-        }
-        $principalContext.Dispose()
-        }
     }
     elseif ($psboundparameters.Auth -eq "SQL")
     {
@@ -101,9 +110,9 @@ function Set-TargetResource
                 Write-Verbose "Credential test successful. Connecting to SQL with SQL Credentials."
                 $server = Login-SQLServer -Auth $Auth -Cred $Credential
             }
-        }elseif(Test-Path "C:\SQL_SA_Password.txt")
+        }elseif(Test-Path $FilePath)
         {
-            $pass = (Get-Content C:\SQL_SA_Password.txt -Delimiter ' = ')[1]
+            $pass = ((Get-Content $FilePath).replace(' ','') -Delimiter '=')[1]
             if (($server.Logins | Where-Object LoginType -eq "SqlLogin" | Where-Object Name -match "sa"))
             {
                 Write-Verbose "Creating sa user PSCredential"
@@ -160,6 +169,7 @@ function Test-TargetResource
         [ValidateSet("Windows","SQL")]
         [String]$Auth = "SQL",
         [pscredential]$Credential,
+        [String]$FilePath,
         [ValidateSet("Present", "Absent")]
         [string] $Ensure = "Present"
     )
@@ -189,6 +199,27 @@ function Test-TargetResource
         { return $true } else { return $false }
     }
 
+}
+
+Function Test-Auth
+{
+    param([pscredential]$Credential)
+    try
+    {
+        $principalContext = New-Object System.DirectoryServices.AccountManagement.PrincipalContext -ArgumentList ([System.DirectoryServices.AccountManagement.ContextType]::Machine)
+        $AdminExist = ([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username))
+        $AdminGroup = [System.DirectoryServices.AccountManagement.GroupPrincipal]::FindByIdentity($principalContext, "Administrators")
+        $AdminMember = [bool]([System.DirectoryServices.AccountManagement.UserPrincipal]::FindByIdentity($principalContext, $Credential.username).IsMemberOf($AdminGroup))
+        if(($AdminExist) -and ($AdminMember))
+        {
+            $CredValid = [bool]$principalContext.ValidateCredentials($Credential.UserName, $Credential.GetNetworkCredential().Password)
+        }else{$CredValid = $false}
+    }finally{
+        $AdminExist.Dispose()
+        $AdminGroup.Dispose()
+        $principalContext.Dispose()
+    }
+        Return $CredValid
 }
 
 Function Login-SQLServer

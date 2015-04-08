@@ -6,5 +6,6 @@ class RS_rsSQLUser : OMI_BaseResource
 [write,Description("Create user as Sysadmin.")]boolean Admin;
 [write,Description("Authentication method"),ValueMap{"Windows", "SQL"},Values{"Windows", "SQL"}]string Auth;
 [write,Description("Account to use for creating SQL user."),EmbeddedInstance("MSFT_Credential")]string Credential;
+[write,Description("File Path for '=' separated sa user/password pair in a plaintext file")]string FilePath;
 [write,ValueMap{"Present", "Absent"},Values{"Present", "Absent"}] string Ensure;
 };
