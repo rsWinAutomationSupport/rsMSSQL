@@ -97,8 +97,6 @@ function Set-TargetResource
                 $server = Login-SQLServer -Auth $Auth -Cred $Credential
             }else{Write-Verbose "Credential test Failed. Check your Credential object"}
         }else{Write-Verbose "Windows Auth without Credentials specified. Using DSC Run Account."}
-        }
-        
     }
     elseif ($psboundparameters.Auth -eq "SQL")
     {
